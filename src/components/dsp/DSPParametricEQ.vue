@@ -249,30 +249,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-
-const apoToBandType: Record<string, ParametricEQBandType> = {
-  PK: ParametricEQBandType.PEAK,
-  PEQ: ParametricEQBandType.PEAK,
-  HP: ParametricEQBandType.HIGH_PASS,
-  HPQ: ParametricEQBandType.HIGH_PASS,
-  LP: ParametricEQBandType.LOW_PASS,
-  LPQ: ParametricEQBandType.LOW_PASS,
-  LS: ParametricEQBandType.LOW_SHELF,
-  HS: ParametricEQBandType.HIGH_SHELF,
-  NO: ParametricEQBandType.NOTCH,
-  // Currently not supported are:
-  // Modal, BP, LSC x dB, HS x dB, AP, LS with dB slope, HS with dB slope
-  // and any other non Parametric EQ types
-};
-
-const bandTypeToApo: Record<ParametricEQBandType, string> = {
-  [ParametricEQBandType.PEAK]: "PK",
-  [ParametricEQBandType.HIGH_PASS]: "HP",
-  [ParametricEQBandType.LOW_PASS]: "LP",
-  [ParametricEQBandType.LOW_SHELF]: "LS",
-  [ParametricEQBandType.HIGH_SHELF]: "HS",
-  [ParametricEQBandType.NOTCH]: "NO",
-};
+import {
+  bandTypeHasGain,
+  formatApoFilterLine,
+  parseApoFilterLine,
+} from "@/helpers/apo_eq";
 
 // Actions share one width so they stay aligned however many wrap per row, and
 // override Button's shrink-0 and whitespace-nowrap so they can fit a narrow
@@ -327,32 +308,8 @@ const importApoSettings = (content: string) => {
         importPreamp[currentChannel] = 0; // So we know the config specified this channel
       }
     } else if (line.startsWith("Filter")) {
-      // Parses filter settings from REW or Equalizer APO text format.
-      // Syntax of APO (from https://sourceforge.net/p/equalizerapo/wiki/Configuration%20reference/):
-      // Filter <n>: ON <Type> Fc <Frequency> Hz Gain <Gain value> dB Q <Q value>
-      // Filter <n>: ON <Type> Fc <Frequency> Hz Gain <Gain value> dB BW Oct <Bandwidth value>
-      // Matches patterns like:
-      // - "Filter 1: ON PK Fc 29.15 Hz Gain -9.60 dB Q 1.007" (REW)
-      // - "Filter: ON PK 29.15 Hz -9.60 dB 1.007" (EQ APO)
-      const match = line.match(
-        /Filter(?:\s+\d+)?:\s+(ON|OFF)\s+(\w+)\s+(?:Fc\s+)?(\d+\.?\d*)\s*(?:Hz)?\s+(?:Gain\s+)?(-?\d+\.?\d*)\s+dB\s+(?:(?:Q\s+)?(\d+\.?\d*)|(?:BW\s+Oct\s+)(\d+\.?\d*))/,
-      );
-
-      if (match) {
-        const [_, enabled, type, frequency, gain, q, bw] = match;
-        // Convert BW to Q if BW is present
-        const finalQ = bw ? bandwidthToQ(parseFloat(bw)) : parseFloat(q);
-        if (type !== "None") {
-          bands.push({
-            frequency: parseFloat(frequency),
-            gain: parseFloat(gain),
-            q: parseFloat(q),
-            type: apoToBandType[type] || ParametricEQBandType.PEAK,
-            enabled: enabled === "ON",
-            channel: currentChannel,
-          });
-        }
-      }
+      const filter = parseApoFilterLine(line);
+      if (filter) bands.push({ ...filter, channel: currentChannel });
     } else if (line.startsWith("Preamp")) {
       const match = line.match(/Preamp:\s*(-?\d+\.?\d*)\s+dB/);
       if (match) {
@@ -424,12 +381,6 @@ const importApoSettings = (content: string) => {
   });
 };
 
-// Helper function to convert bandwidth to Q factor
-function bandwidthToQ(bw: number): number {
-  // from https://sengpielaudio.com/calculator-bandwidth.htm
-  return Math.sqrt(Math.pow(2, bw)) / (Math.pow(2, bw) - 1);
-}
-
 const handleApoUpload = (event: Event) => {
   const input = event.target as HTMLInputElement;
   if (input.files && input.files[0]) {
@@ -481,16 +432,14 @@ const exportApoSettings = () => {
       let filterIndex = 1;
       peq.value.bands.forEach((band) => {
         if (band.channel === channel || band.channel === AudioChannel.ALL) {
-          const apoType = bandTypeToApo[band.type];
-          content += `Filter ${filterIndex++}: ${band.enabled ? "ON" : "OFF"} ${apoType} Fc ${band.frequency.toFixed(1)} Hz Gain ${band.gain.toFixed(2)} dB Q ${band.q.toFixed(3)}\n`;
+          content += `${formatApoFilterLine(band, filterIndex++)}\n`;
         }
       });
     }
   } else {
     // Simple export (only ALL channel bands)
     peq.value.bands.forEach((band, index) => {
-      const apoType = bandTypeToApo[band.type];
-      content += `Filter ${index + 1}: ${band.enabled ? "ON" : "OFF"} ${apoType} Fc ${band.frequency.toFixed(1)} Hz Gain ${band.gain.toFixed(2)} dB Q ${band.q.toFixed(3)}\n`;
+      content += `${formatApoFilterLine(band, index + 1)}\n`;
     });
   }
 
@@ -541,11 +490,7 @@ const filterTypes = Object.values(ParametricEQBandType).map((value) => ({
 
 // Helper functions
 const showGainParameter = (type: ParametricEQBandType) => {
-  return ![
-    ParametricEQBandType.HIGH_PASS,
-    ParametricEQBandType.LOW_PASS,
-    ParametricEQBandType.NOTCH,
-  ].includes(type);
+  return bandTypeHasGain(type);
 };
 
 interface Viewport {
