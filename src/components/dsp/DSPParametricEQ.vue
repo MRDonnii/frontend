@@ -235,6 +235,7 @@ import {
   ParametricEQFilter,
 } from "@/plugins/api/interfaces";
 import DSPSlider from "./DSPSlider.vue";
+import { bandResponseDb } from "@/helpers/parametric_eq_response";
 import DSPHelp from "./DSPHelp.vue";
 import { $t } from "@/plugins/i18n";
 import { useMutationObserver } from "@vueuse/core";
@@ -626,18 +627,14 @@ const drawGraph = () => {
       frequencies[x] = xToFreq(x, viewport.value);
     }
 
-    const magResponse = new Float32Array(width);
-    const phaseResponse = new Float32Array(width);
-    const filter = createBiquadFilter(audioContext, band);
-    filter.getFrequencyResponse(frequencies, magResponse, phaseResponse);
+    const response = bandResponseDb(band, frequencies);
 
     for (
       let x = viewport.value.padding_lr;
       x < width - viewport.value.padding_right;
       x++
     ) {
-      const response = 20 * Math.log10(magResponse[x]);
-      const y = gainToY(response, viewport.value);
+      const y = gainToY(response[x], viewport.value);
 
       if (x === viewport.value.padding_lr) {
         ctx.moveTo(x, y);
@@ -661,7 +658,7 @@ const drawGraph = () => {
     ctx.globalAlpha = 1;
     ctx.setLineDash([]);
 
-    return { frequencies, magResponse };
+    return response;
   };
 
   // Function to draw the response curve for a channel
@@ -711,7 +708,7 @@ const drawGraph = () => {
 
     // Draw individual filter responses
     peq.value.bands.forEach((band, index) => {
-      const { magResponse } = drawBandResponse(band, index, ctx);
+      const response = drawBandResponse(band, index, ctx);
       if (!band.enabled) return;
 
       // Add band response to appropriate channel(s)
@@ -719,13 +716,13 @@ const drawGraph = () => {
         // Add to all channels
         channels.forEach((ch) => {
           for (let x = 0; x < width; x++) {
-            channelResponses[ch][x] += 20 * Math.log10(magResponse[x]);
+            channelResponses[ch][x] += response[x];
           }
         });
       } else {
         // Add to specific channel
         for (let x = 0; x < width; x++) {
-          channelResponses[band.channel][x] += 20 * Math.log10(magResponse[x]);
+          channelResponses[band.channel][x] += response[x];
         }
       }
     });
@@ -751,12 +748,12 @@ const drawGraph = () => {
       ) {
         return;
       }
-      const { magResponse } = drawBandResponse(band, index, ctx);
+      const response = drawBandResponse(band, index, ctx);
       if (!band.enabled) return;
 
       // Add to total response
       for (let x = 0; x < width; x++) {
-        totalResponse[x] += 20 * Math.log10(magResponse[x]);
+        totalResponse[x] += response[x];
       }
     });
 
@@ -764,48 +761,6 @@ const drawGraph = () => {
     drawChannelResponse(totalResponse, ctx);
   }
 };
-
-const createBiquadFilter = (
-  context: AudioContext,
-  band: ParametricEQBand,
-): BiquadFilterNode => {
-  const filter = context.createBiquadFilter();
-  switch (band.type) {
-    case ParametricEQBandType.HIGH_PASS:
-      filter.type = "highpass";
-      break;
-    case ParametricEQBandType.LOW_PASS:
-      filter.type = "lowpass";
-      break;
-    case ParametricEQBandType.HIGH_SHELF:
-      filter.type = "highshelf";
-      break;
-    case ParametricEQBandType.LOW_SHELF:
-      filter.type = "lowshelf";
-      break;
-    case ParametricEQBandType.NOTCH:
-      filter.type = "notch";
-      break;
-    case ParametricEQBandType.PEAK:
-      filter.type = "peaking";
-      break;
-  }
-  filter.frequency.value = band.frequency;
-  // Web Audio interprets Q in dB for highpass/lowpass, but MA stores linear Q
-  if (filter.type === "highpass" || filter.type === "lowpass") {
-    filter.Q.value = 20 * Math.log10(band.q);
-  } else {
-    filter.Q.value = band.q;
-  }
-  filter.gain.value = band.gain;
-  return filter;
-};
-
-const audioContext = new AudioContext();
-
-const biquadFilters = computed(() => {
-  return peq.value.bands.map((band) => createBiquadFilter(audioContext, band));
-});
 
 const isMultiChannel = computed(() => {
   return (
