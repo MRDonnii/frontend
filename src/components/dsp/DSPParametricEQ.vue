@@ -145,6 +145,7 @@
           is_log: false,
         }"
       />
+      <DSPParametricEQHeadroom v-model="peq" />
     </div>
 
     <!-- Band Controls Card -->
@@ -237,6 +238,7 @@ import {
 import DSPSlider from "./DSPSlider.vue";
 import { bandResponseDb } from "@/helpers/parametric_eq_response";
 import DSPHelp from "./DSPHelp.vue";
+import DSPParametricEQHeadroom from "./DSPParametricEQHeadroom.vue";
 import { $t } from "@/plugins/i18n";
 import { useMutationObserver } from "@vueuse/core";
 import { Download, Plus, Speaker, Trash2, Upload, X } from "@lucide/vue";
