@@ -82,8 +82,23 @@
 
     <!-- Frequency Response Graph -->
     <div ref="graphContainer" class="graph-container">
-      <canvas ref="canvas" class="frequency-graph"></canvas>
+      <canvas
+        ref="canvas"
+        class="frequency-graph"
+        :class="graphCursorClass"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+        @pointerleave="onPointerLeave"
+        @wheel="onWheel"
+        @dblclick="onDoubleClick"
+        @touchstart="onTouchStart"
+      ></canvas>
     </div>
+    <p class="px-2 pt-1 text-xs text-muted-foreground">
+      {{ graphHint }}
+    </p>
 
     <!-- Band Selection with Visual Indicators -->
     <div class="flex flex-wrap gap-2 border-y border-border p-2">
@@ -117,7 +132,7 @@
               })
         }}
       </Button>
-      <Button variant="outline" size="sm" @click="addBand">
+      <Button variant="outline" size="sm" @click="addBand()">
         <Plus />
         {{
           editedChannel === AudioChannel.ALL
@@ -127,6 +142,28 @@
               })
         }}
       </Button>
+      <div class="ml-auto flex gap-1">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          :disabled="!canUndo"
+          :aria-label="$t('settings.dsp.parametric_eq.undo')"
+          :title="$t('settings.dsp.parametric_eq.undo')"
+          @click="undo"
+        >
+          <Undo2 />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          :disabled="!canRedo"
+          :aria-label="$t('settings.dsp.parametric_eq.redo')"
+          :title="$t('settings.dsp.parametric_eq.redo')"
+          @click="redo"
+        >
+          <Redo2 />
+        </Button>
+      </div>
     </div>
     <!-- Filter Controls -->
     <div v-if="selectedBandIndex === -1">
@@ -237,10 +274,27 @@ import {
 import DSPSlider from "./DSPSlider.vue";
 import DSPHelp from "./DSPHelp.vue";
 import { $t } from "@/plugins/i18n";
-import { useMutationObserver } from "@vueuse/core";
-import { Download, Plus, Speaker, Trash2, Upload, X } from "@lucide/vue";
+import { useMediaQuery, useMutationObserver } from "@vueuse/core";
+import {
+  Download,
+  Plus,
+  Redo2,
+  Speaker,
+  Trash2,
+  Undo2,
+  Upload,
+  X,
+} from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { useEqGraphPointer } from "@/composables/useEqGraphPointer";
+import { useEqHistory } from "@/composables/useEqHistory";
+import {
+  freqToX,
+  gainToY,
+  xToFreq,
+  type EqGraphViewport,
+} from "@/helpers/eq_graph";
 import {
   Select,
   SelectContent,
@@ -548,22 +602,10 @@ const showGainParameter = (type: ParametricEQBandType) => {
   ].includes(type);
 };
 
-interface Viewport {
-  width: number;
-  height: number;
-  min_gain: number;
-  max_gain: number;
-  min_freq: number;
-  max_freq: number;
-  padding_lr: number;
-  padding_right: number;
-  padding_tb: number;
-}
-
 const DISABLED_BAND_ALPHA = 0.35;
 const DISABLED_BAND_DASH = [6, 4];
 
-const viewport = ref<Viewport>({
+const viewport = ref<EqGraphViewport>({
   width: 0,
   height: 0,
   min_gain: -20,
@@ -873,12 +915,15 @@ const removeBand = (index: number) => {
   }
 };
 
-const addBand = () => {
+const NEW_BAND_FREQUENCY = 1000;
+const NEW_BAND_Q = 1.0;
+
+const addBand = (frequency = NEW_BAND_FREQUENCY, gain = 0) => {
   const newIndex = peq.value.bands.length;
   peq.value.bands.push({
-    frequency: 1000,
-    q: 1.0,
-    gain: 0,
+    frequency,
+    q: NEW_BAND_Q,
+    gain,
     type: ParametricEQBandType.PEAK,
     enabled: true,
     channel: editedChannel.value,
@@ -887,6 +932,50 @@ const addBand = () => {
     selectedBandIndex.value = newIndex;
   });
 };
+
+const { commit, canUndo, canRedo, undo, redo } = useEqHistory(peq);
+
+// A band is drawn, and can be grabbed, when it plays on the plotted channel.
+const isBandShown = (band: ParametricEQBand) =>
+  editedChannel.value === AudioChannel.ALL ||
+  band.channel === AudioChannel.ALL ||
+  band.channel === editedChannel.value;
+
+const {
+  hoveringHandle,
+  dragging,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerLeave,
+  onWheel,
+  onDoubleClick,
+  onTouchStart,
+} = useEqGraphPointer({
+  canvas,
+  viewport,
+  bands: () => peq.value.bands,
+  isShown: isBandShown,
+  hasGain: (band) => showGainParameter(band.type),
+  onSelect: (index) => {
+    selectedBandIndex.value = index;
+  },
+  onAdd: addBand,
+  onEditEnd: commit,
+});
+
+// Scrolling and double-clicking need a mouse; a finger can only drag.
+const coarsePointer = useMediaQuery("(pointer: coarse)");
+const graphHint = computed(() =>
+  coarsePointer.value
+    ? $t("settings.dsp.parametric_eq.graph_hint_touch")
+    : $t("settings.dsp.parametric_eq.graph_hint"),
+);
+
+const graphCursorClass = computed(() => {
+  if (dragging.value) return "cursor-grabbing";
+  return hoveringHandle.value ? "cursor-grab" : "cursor-crosshair";
+});
 
 // Watch for changes and redraw
 watch(() => peq.value.preamp, drawGraph);
@@ -920,53 +1009,10 @@ onMounted(() => {
   window.addEventListener("resize", drawGraph);
 });
 
-// Convert between screen and frequency coordinates
-const freqToX = (freq: number, viewport: Viewport): number => {
-  const logFreq = Math.log2(freq / viewport.min_freq);
-  const logMax = Math.log2(viewport.max_freq / viewport.min_freq);
-  return (
-    (logFreq / logMax) *
-      (viewport.width - viewport.padding_lr - viewport.padding_right) +
-    viewport.padding_lr
-  );
-};
-
-const xToFreq = (x: number, viewport: Viewport): number => {
-  const logMax = Math.log2(viewport.max_freq / viewport.min_freq);
-  const freq =
-    viewport.min_freq *
-    Math.pow(
-      2,
-      ((x - viewport.padding_lr) /
-        (viewport.width - viewport.padding_lr - viewport.padding_right)) *
-        logMax,
-    );
-  return Math.min(Math.max(freq, viewport.min_freq), viewport.max_freq);
-};
-
-const gainToY = (gain: number, viewport: Viewport): number => {
-  return (
-    viewport.height / 2 -
-    (gain * (viewport.height - 2 * viewport.padding_tb)) /
-      (2 * Math.max(Math.abs(viewport.min_gain), Math.abs(viewport.max_gain)))
-  );
-};
-
-const yToGain = (y: number, viewport: Viewport): number => {
-  return (
-    -(
-      (y - (viewport.height / 2 - viewport.padding_tb)) *
-      2 *
-      Math.max(Math.abs(viewport.min_gain), Math.abs(viewport.max_gain))
-    ) /
-    (viewport.height - 2 * viewport.padding_tb)
-  );
-};
-
 // Draw frequency response grid
 const drawGrid = (
   ctx: CanvasRenderingContext2D,
-  viewport: Viewport,
+  viewport: EqGraphViewport,
   colors: GraphColors,
 ) => {
   const width = ctx.canvas.width / 2;

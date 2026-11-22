@@ -314,7 +314,11 @@
                 "channel": "This band will be applied to",
                 "per_channel_preamp": "Additional preamp gain for {channel}",
                 "disable_multichannel_controls": "Disable Multi-Channel controls",
-                "help": "Precise tone shaping: each band targets a frequency and can cut or boost it. Cuts are safer than boosts, which can cause clipping."
+                "help": "Precise tone shaping: each band targets a frequency and can cut or boost it. Cuts are safer than boosts, which can cause clipping.",
+                "graph_hint": "Drag a point to move a band, scroll over it to change its Q, or double-click the graph to add a band.",
+                "graph_hint_touch": "Drag a point to move a band.",
+                "undo": "Undo",
+                "redo": "Redo"
             },
             "tone_control": {
                 "bass_level": "Bass Level",
